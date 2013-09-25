@@ -3,6 +3,7 @@ package form
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 )
 
@@ -114,17 +115,41 @@ func (f *StringField) Errors() []error {
 	return f.errors
 }
 
-// type Form struct {
+type Form struct {
+	Fields map[string]Field
+	Errors []error
+}
 
-//   Fields map[string]Field
-// }
+type FieldError struct {
+	FieldName  string
+	FieldError error
+}
 
-// func NewForm() (f *Form) {
-//   f = &Form{}
-//   f.Fields = make(map[string]Field)
-//   return
-// }
+func (e FieldError) Error() string {
+	return fmt.Sprintf("%s: %v", e.FieldName, e.FieldError)
+}
 
-// func (f *Form) AddField(name string, field Field) {
-//   f.Fields[name] = field
-// }
+func NewForm() (f *Form) {
+	f = &Form{}
+	f.Fields = make(map[string]Field)
+	f.Errors = make([]error, 0)
+	return
+}
+
+func (f *Form) AddField(name string, field Field) {
+	f.Fields[name] = field
+}
+
+func (f *Form) Parse(values url.Values) {
+	f.Errors = make([]error, 0)
+
+	for name, field := range f.Fields {
+		if v, ok := values[name]; ok {
+			field.Parse(v[0])
+		}
+		field.Validate()
+		for _, e := range field.Errors() {
+			f.Errors = append(f.Errors, FieldError{FieldName: name, FieldError: e})
+		}
+	}
+}

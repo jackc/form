@@ -1,6 +1,7 @@
 package form
 
 import (
+	"net/url"
 	"testing"
 )
 
@@ -75,4 +76,40 @@ func TestIntField(t *testing.T) {
 	f.Parse("101")
 	f.Validate()
 	hasError(t, f.Errors(), TooBigError{Max: 100})
+}
+
+func TestFormParse(t *testing.T) {
+	f := NewForm()
+	f.AddField("name", &StringField{MaxLength: 30})
+	f.AddField("age", &IntField{Max: 1000})
+
+	values := make(url.Values)
+	values["name"] = []string{"David"}
+	values["age"] = []string{"30"}
+	f.Parse(values)
+
+	if len(f.Errors) > 0 {
+		t.Errorf("Unexpected errors parsing form: %v", f.Errors)
+	}
+
+	if f.Fields["name"].(*StringField).Value != "David" {
+		t.Errorf("Expected \"name\" to be parsed to \"David\" but it was \"%v\"", f.Fields["name"].(*StringField).Value)
+	}
+
+	if f.Fields["age"].(*IntField).Value != 30 {
+		t.Errorf("Expected \"age\" to be parsed to 30 but it was %v", f.Fields["age"].(*IntField).Value)
+	}
+}
+
+func TestFormParseWithErrors(t *testing.T) {
+	f := NewForm()
+	f.AddField("age", &IntField{Max: 1000})
+
+	values := make(url.Values)
+	values["age"] = []string{"-1"}
+	f.Parse(values)
+
+	if len(f.Errors) != 1 {
+		t.Fatalf("Expected 1 error but had %v", len(f.Errors))
+	}
 }
