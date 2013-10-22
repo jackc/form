@@ -2,154 +2,187 @@ package form
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 )
 
-type Field interface {
-	Parse(value string)
-	Submission() string
-	Validate()
-	Errors() []error
+type FieldTemplate interface {
+	GetName() string
+	Parse(unparsed string) (interface{}, error)
+	Validate(value interface{}) error
 }
 
 var MissingError = errors.New("is missing")
-var NotIntError = errors.New("is not an integer")
 
-type TooSmallError struct {
-	Min int64
+type TooShortError struct {
+	Minimum int
 }
 
-func (e TooSmallError) Error() string {
-	return fmt.Sprintf("is too small (minimum: %d)", e.Min)
+func (e TooShortError) Error() string {
+	return "Too short"
 }
 
-type TooBigError struct {
-	Max int64
+type TooLongError struct {
+	Maximum int
 }
 
-func (e TooBigError) Error() string {
-	return fmt.Sprintf("is too big (maximum: %d)", e.Max)
+func (e TooLongError) Error() string {
+	return "Too long"
 }
 
-type IntField struct {
-	submission    string
-	submitted     bool
-	unconvertable bool
-	Value         int64
-	Required      bool
-	Min           int64
-	Max           int64
-	errors        []error
-}
-
-func (f *IntField) Parse(value string) {
-	var err error
-	f.submission = value
-	f.submitted = true
-	f.Value, err = strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		f.unconvertable = true
-	}
-}
-
-func (f *IntField) Submission() string {
-	return f.submission
-}
-
-func (f *IntField) Validate() {
-	f.errors = make([]error, 0)
-
-	if f.Required && !f.submitted {
-		f.errors = append(f.errors, MissingError)
-		return
-	}
-
-	if f.unconvertable {
-		f.errors = append(f.errors, NotIntError)
-		return
-	}
-
-	if f.Value < f.Min {
-		f.errors = append(f.errors, TooSmallError{Min: f.Min})
-	}
-
-	if f.Value > f.Max {
-		f.errors = append(f.errors, TooBigError{Max: f.Max})
-	}
-}
-
-func (f *IntField) Errors() []error {
-	return f.errors
-}
-
-type StringField struct {
-	submitted bool
-	Value     string
+type StringTemplate struct {
+	Name      string
 	Required  bool
-	MinLength int64
-	MaxLength int64
-	errors    []error
+	MinLength int
+	MaxLength int
 }
 
-func (f *StringField) Parse(value string) {
-	f.Value = value
-	f.submitted = true
+func (f *StringTemplate) GetName() string {
+	return f.Name
 }
 
-func (f *StringField) Submission() string {
-	return f.Value
+func (f *StringTemplate) Parse(unparsed string) (interface{}, error) {
+	return unparsed, nil
 }
 
-func (f *StringField) Validate() {
-	f.errors = make([]error, 0)
-
-	if f.Required && !f.submitted {
-		f.errors = append(f.errors, MissingError)
-		return
+func (f *StringTemplate) Validate(value interface{}) (err error) {
+	if value == nil || value == "" {
+		if f.Required {
+			return MissingError
+		} else {
+			return nil
+		}
 	}
-}
 
-func (f *StringField) Errors() []error {
-	return f.errors
-}
+	v := value.(string)
 
-type Form struct {
-	Fields map[string]Field
-	Errors []error
-}
+	if len(v) < f.MinLength {
+		return TooShortError{Minimum: f.MinLength}
+	}
 
-type FieldError struct {
-	FieldName  string
-	FieldError error
-}
+	if f.MaxLength < len(v) {
+		return TooLongError{Maximum: f.MaxLength}
+	}
 
-func (e FieldError) Error() string {
-	return fmt.Sprintf("%s: %v", e.FieldName, e.FieldError)
-}
-
-func NewForm() (f *Form) {
-	f = &Form{}
-	f.Fields = make(map[string]Field)
-	f.Errors = make([]error, 0)
 	return
 }
 
-func (f *Form) AddField(name string, field Field) {
-	f.Fields[name] = field
+type IntTemplate struct {
+	Name     string
+	Required bool
+	Minimum  int64
+	Maximum  int64
 }
 
-func (f *Form) Parse(values url.Values) {
-	f.Errors = make([]error, 0)
+func (f *IntTemplate) GetName() string {
+	return f.Name
+}
 
-	for name, field := range f.Fields {
-		if v, ok := values[name]; ok {
-			field.Parse(v[0])
+func (f *IntTemplate) Parse(unparsed string) (interface{}, error) {
+	if unparsed == "" {
+		return nil, nil
+	}
+
+	if parsed, err := strconv.ParseInt(unparsed, 10, 64); err == nil {
+		return parsed, err
+	} else {
+		return nil, err
+	}
+}
+
+func (f *IntTemplate) Validate(value interface{}) error {
+	if f.Required && value == nil {
+		return MissingError
+	}
+
+	v := value.(int64)
+
+	if v < f.Minimum {
+		return errors.New("Too small")
+	}
+
+	if f.Maximum < v {
+		return errors.New("Too big")
+	}
+
+	return nil
+}
+
+type FormTemplate struct {
+	fieldTemplates map[string]FieldTemplate
+	CustomValidate func(*Form)
+}
+
+func NewFormTemplate() (f *FormTemplate) {
+	f = &FormTemplate{}
+	f.fieldTemplates = make(map[string]FieldTemplate)
+	return
+}
+
+func (f *FormTemplate) AddField(fieldTemplate FieldTemplate) {
+	f.fieldTemplates[fieldTemplate.GetName()] = fieldTemplate
+}
+
+func (f *FormTemplate) Parse(values url.Values) (s *Form) {
+	s = new(Form)
+	s.Fields = make(map[string]*Field, len(f.fieldTemplates))
+
+	for name, field := range f.fieldTemplates {
+		var sf Field
+
+		if fieldValues, ok := values[name]; ok {
+			unparsed := fieldValues[len(fieldValues)-1]
+			sf.Unparsed = unparsed
+
+			parsed, err := field.Parse(unparsed)
+			sf.Parsed = parsed
+			sf.Error = err
 		}
-		field.Validate()
-		for _, e := range field.Errors() {
-			f.Errors = append(f.Errors, FieldError{FieldName: name, FieldError: e})
+
+		s.Fields[name] = &sf
+	}
+
+	return
+}
+
+func (f *FormTemplate) New() (s *Form) {
+	s = new(Form)
+	s.Fields = make(map[string]*Field, len(f.fieldTemplates))
+
+	for name, field := range f.fieldTemplates {
+		var sf Field
+		sf.Parsed, _ = field.Parse("")
+		s.Fields[name] = &sf
+	}
+
+	return
+}
+
+func (f *FormTemplate) Validate(s *Form) {
+	for name, fieldTemplate := range f.fieldTemplates {
+		s.Fields[name].Error = fieldTemplate.Validate(s.Fields[name].Parsed)
+	}
+
+	if f.CustomValidate != nil {
+		f.CustomValidate(s)
+	}
+}
+
+type Field struct {
+	Unparsed string
+	Parsed   interface{}
+	Error    error
+}
+
+type Form struct {
+	Fields map[string]*Field
+}
+
+func (f *Form) IsValid() bool {
+	for _, field := range f.Fields {
+		if field.Error != nil {
+			return false
 		}
 	}
+	return true
 }

@@ -1,115 +1,124 @@
 package form
 
 import (
+	"errors"
 	"net/url"
 	"testing"
 )
 
-func hasError(t *testing.T, actualErrors []error, expected error) {
-	if len(actualErrors) == 0 {
-		t.Error("Expected a validation error but none occurred")
-		return
+func TestStringTemplateValidate(t *testing.T) {
+	var st *StringTemplate
+
+	st = &StringTemplate{MinLength: 4, MaxLength: 10}
+	if err := st.Validate(nil); err != nil {
+		t.Errorf("Unexpected validate result: %v", err)
+	}
+	if err := st.Validate(""); err != nil {
+		t.Errorf("Unexpected validate result: %v", err)
 	}
 
-	var found bool
-	for _, e := range actualErrors {
-		if e == expected {
-			found = true
-		}
+	st = &StringTemplate{Required: true, MaxLength: 100}
+	if err := st.Validate(nil); err != MissingError {
+		t.Errorf("Unexpected validate result: %v", err)
+	}
+	if err := st.Validate(""); err != MissingError {
+		t.Errorf("Unexpected validate result: %v", err)
+	}
+	if err := st.Validate("John"); err != nil {
+		t.Errorf("Unexpected validate result: %v", err)
 	}
 
-	if !found {
-		t.Errorf("Expected MissingError but it was %T", actualErrors[0])
+	st = &StringTemplate{MinLength: 4, MaxLength: 6}
+	if err := st.Validate("Sam"); err != (TooShortError{Minimum: 4}) {
+		t.Errorf("Unexpected validate result: %v", err)
+	}
+	if err := st.Validate("John"); err != nil {
+		t.Errorf("Unexpected validate result: %v", err)
+	}
+	if err := st.Validate("Alexender"); err != (TooLongError{Maximum: 6}) {
+		t.Errorf("Unexpected validate result: %v", err)
 	}
 }
 
-func FieldLint(t *testing.T, f Field) {
-	expected := "abcd"
-	f.Parse(expected)
-	if actual := f.Submission(); actual != expected {
-		t.Errorf("Expected Submission() (%#v) to equal value passed to Parse() (%#v)", actual, expected)
-	}
-}
-
-func TestStringField(t *testing.T) {
-	var f StringField
-
-	FieldLint(t, &f)
-
-	f = StringField{MinLength: 0, MaxLength: 100}
-	f.Parse("foo")
-	if f.Value != "foo" {
-		t.Errorf("Expected \"foo\" to parse as \"foo\" but it was %v", f.Value)
-	}
-
-	f = StringField{Required: true}
-	f.Validate()
-	hasError(t, f.Errors(), MissingError)
-}
-
-func TestIntField(t *testing.T) {
-	var f IntField
-
-	FieldLint(t, &f)
-
-	f = IntField{Min: 0, Max: 100}
-	f.Parse("42")
-	if f.Value != 42 {
-		t.Errorf("Expected \"42\" to parse as 42 but it was %v", f.Value)
-	}
-
-	f = IntField{Min: 0, Max: 100, Required: true}
-	f.Validate()
-	hasError(t, f.Errors(), MissingError)
-
-	f = IntField{Min: 0, Max: 100}
-	f.Parse("asdf")
-	f.Validate()
-	hasError(t, f.Errors(), NotIntError)
-
-	f = IntField{Min: 0, Max: 100}
-	f.Parse("-1")
-	f.Validate()
-	hasError(t, f.Errors(), TooSmallError{Min: 0})
-
-	f = IntField{Min: 0, Max: 100}
-	f.Parse("101")
-	f.Validate()
-	hasError(t, f.Errors(), TooBigError{Max: 100})
-}
-
-func TestFormParse(t *testing.T) {
-	f := NewForm()
-	f.AddField("name", &StringField{MaxLength: 30})
-	f.AddField("age", &IntField{Max: 1000})
+func TestFormTemplateParse(t *testing.T) {
+	formTemplate := NewFormTemplate()
+	formTemplate.AddField(&StringTemplate{Name: "firstName"})
+	formTemplate.AddField(&StringTemplate{Name: "lastName"})
 
 	values := make(url.Values)
-	values["name"] = []string{"David"}
-	values["age"] = []string{"30"}
-	f.Parse(values)
+	values["firstName"] = []string{"John"}
+	values["lastName"] = []string{"Smith"}
 
-	if len(f.Errors) > 0 {
-		t.Errorf("Unexpected errors parsing form: %v", f.Errors)
+	form := formTemplate.Parse(values)
+
+	if actual := form.Fields["firstName"].Unparsed; actual != "John" {
+		t.Errorf(`Expected unparsed "firstName" to be "John" but it was %#v`, actual)
 	}
 
-	if f.Fields["name"].(*StringField).Value != "David" {
-		t.Errorf("Expected \"name\" to be parsed to \"David\" but it was \"%v\"", f.Fields["name"].(*StringField).Value)
+	if actual := form.Fields["firstName"].Parsed; actual != "John" {
+		t.Errorf(`Expected parsed "firstName" to be "John" but it was %#v`, actual)
 	}
 
-	if f.Fields["age"].(*IntField).Value != 30 {
-		t.Errorf("Expected \"age\" to be parsed to 30 but it was %v", f.Fields["age"].(*IntField).Value)
+	if actual := form.Fields["lastName"].Unparsed; actual != "Smith" {
+		t.Errorf(`Expected unparsed "lastName" to be "Smith" but it was %#v`, actual)
+	}
+
+	if actual := form.Fields["lastName"].Parsed; actual != "Smith" {
+		t.Errorf(`Expected parsed "lastName" to be "Smith" but it was %#v`, actual)
 	}
 }
 
-func TestFormParseWithErrors(t *testing.T) {
-	f := NewForm()
-	f.AddField("age", &IntField{Max: 1000})
+func TestFormTemplateParseWithParseError(t *testing.T) {
+	formTemplate := NewFormTemplate()
+	formTemplate.AddField(&IntTemplate{Name: "age"})
 
 	values := make(url.Values)
-	values["age"] = []string{"-1"}
-	f.Parse(values)
+	values["age"] = []string{"foo"}
 
-	if len(f.Errors) != 1 {
-		t.Fatalf("Expected 1 error but had %v", len(f.Errors))
+	form := formTemplate.Parse(values)
+
+	if actual := form.Fields["age"].Unparsed; actual != "foo" {
+		t.Errorf(`Expected unparsed "age" to be "foo" but it was %#v`, actual)
+	}
+
+	if actual := form.Fields["age"].Parsed; actual != nil {
+		t.Errorf(`Expected parsed "actual" to be <nil> but it was %#v`, actual)
+	}
+}
+
+func TestFormTemplateNew(t *testing.T) {
+	formTemplate := NewFormTemplate()
+	formTemplate.AddField(&StringTemplate{Name: "name"})
+	form := formTemplate.New()
+
+	if actual := form.Fields["name"].Unparsed; actual != "" {
+		t.Errorf(`Expected empty "name" to be "" but it was %#v`, actual)
+	}
+
+	if actual := form.Fields["name"].Parsed; actual != "" {
+		t.Errorf(`Expected empty "name" to be "" but it was %#v`, actual)
+	}
+}
+
+func TestFormTemplateValidate(t *testing.T) {
+	formTemplate := NewFormTemplate()
+	formTemplate.AddField(&StringTemplate{Name: "name", Required: true})
+	form := formTemplate.New()
+	formTemplate.Validate(form)
+
+	if form.Fields["name"].Error != MissingError {
+		t.Error("Validate didn't")
+	}
+
+	formTemplate = NewFormTemplate()
+	formTemplate.AddField(&StringTemplate{Name: "name"})
+	formTemplate.CustomValidate = func(f *Form) {
+		f.Fields["name"].Error = errors.New("Custom Error")
+	}
+	form = formTemplate.New()
+	formTemplate.Validate(form)
+
+	if form.Fields["name"].Error.Error() != "Custom Error" {
+		t.Errorf(`Expected "Custom Error" but it ws %#v`, form.Fields["name"].Error)
 	}
 }
